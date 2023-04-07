@@ -5,21 +5,28 @@ import haxe.macro.Type;
 import haxe.macro.Expr;
 
 class ForwardOpsMacro {
+    static private function assertAbstract (type: Type): Void {
+        if (!type.match(TAbstract(_,_)))
+            Context.error('type $type expected to be an Abstract', Context.currentPos());
+    }
+
+    static private function getAbstractRef (type: Type): Ref<AbstractType> {
+        assertAbstract(type);
+        return switch (type) {
+            case TAbstract(ref, _):
+                ref;
+            case _: throw "Error";
+        }
+    }
+
+    static private function wrapExpr (exprDef: ExprDef): Expr {
+        return {
+            expr: exprDef,
+            pos: Context.currentPos()
+        }
+    }
+
     macro static public function build (localTypePath: String, baseTypePath: String): Array<Field> {
-        function assertAbstract (type: Type): Void {
-            if (!type.match(TAbstract(_,_)))
-                Context.error('type $type expected to be an Abstract', Context.currentPos());
-        }
-
-        function getAbstractRef (type: Type): Ref<AbstractType> {
-            assertAbstract(type);
-            return switch (type) {
-                case TAbstract(ref, _):
-                    ref;
-                case _: throw "Error"; // should be an abstract type by now
-            }
-        }
-
         var localComplexType: ComplexType = {
             var localType: Type = Context.getType(localTypePath);
             assertAbstract(localType);
@@ -39,51 +46,63 @@ class ForwardOpsMacro {
             if (!staticField.meta.has(":op"))
                 continue;
 
-            var newArgs = new Array<FunctionArg>();
+            var newArgs = [];
+            var exprDef: ExprDef = {
+                var castedThis: Expr = wrapExpr(ECast(
+                    wrapExpr(EConst(CIdent("this"))),
+                    baseComplexType
+                ));
 
-            var type: Type = staticField.type;
-            // Extract the actual type if the type is TLazy
-            type = switch(type) {
-                case TLazy(_ => _() => actualType):
-                    actualType;
-                case _: type;
-            }
+                switch (staticField.meta.extract(':op')[0].params[0].expr) {
+                    case EBinop(op, e1, e2):
+                        var type: Type = staticField.type;
+                        // Extract the actual type if the type is TLazy
+                        type = switch(type) {
+                            case TLazy(_ => _() => actualType):
+                                actualType;
+                            case _: type;
+                        }
+        
+                        var args = switch (type) {
+                            case TFun(__args, _):
+                                __args;
+                            case _: throw "Error"; // static fields with @:op should always be functions
+                        }
+        
+                        var arg = args[1]; // 
+                        var isBaseType: Bool = (getAbstractRef(arg.t).toString() == baseAbstractRef.toString());
+            
+                        var newArgType: ComplexType = if (isBaseType) {
+                            localComplexType;
+                        } else {
+                            Context.toComplexType(arg.t);
+                        }
+            
+                        var newArg: FunctionArg = {
+                            name: arg.name,
+                            opt: arg.opt,
+                            type: newArgType
+                            // value?
+                            // meta?
+                        };
+                        newArgs.push(newArg);
 
-            var args = switch (type) {
-                case TFun(__args, _):
-                    __args;
-                case _: throw "Error"; // static fields with @:op should always be functions
-            }
+                        var castedNewArg: Expr = wrapExpr(ECast( // casted newArg
+                            wrapExpr(EConst(CIdent(newArg.name))),
+                            baseComplexType
+                        ));
 
-            // skip the first argument - this
-            for (i in 1 ... args.length) {
-                var arg = args[i];
-                var isBaseType: Bool = (getAbstractRef(arg.t).toString() == baseAbstractRef.toString());
-
-                var newArgType: ComplexType = if (isBaseType) {
-                    localComplexType;
-                } else {
-                    Context.toComplexType(arg.t);
+                        EBinop(op, castedThis, castedNewArg);
+                    case EUnop(op, postFix, e):
+                        EUnop(op, postFix, castedThis);
+                    case _: throw "Error";
                 }
-
-                newArgs.push({
-                    name: arg.name,
-                    opt: arg.opt,
-                    type: newArgType
-                    // value?
-                    // meta?
-                });
             }
 
-            var name = staticField.name;
-            var argNames: Array<Expr> = [
-                for (arg in newArgs)
-                    macro $i{arg.name}
-            ];
             var newFunc: Function = {
                 args: newArgs,
                 ret: localComplexType,
-                expr: macro return this.$name($a{argNames})
+                expr: macro return ${wrapExpr(exprDef)}
                 // params?
             }
 

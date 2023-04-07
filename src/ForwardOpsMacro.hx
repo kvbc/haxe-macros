@@ -76,10 +76,14 @@ class ForwardOpsMacro {
             }
 
             var name = staticField.name;
+            var argNames: Array<Expr> = [
+                for (arg in newArgs)
+                    macro $i{arg.name}
+            ];
             var newFunc: Function = {
                 args: newArgs,
                 ret: localComplexType,
-                expr: macro return this.$name(other)
+                expr: macro return this.$name($a{argNames})
                 // params?
             }
 

@@ -1,5 +1,7 @@
-package;
+package macros;
 
+import haxe.macro.ExprTools;
+import haxe.macro.TypeTools;
 import haxe.macro.Context;
 import haxe.macro.Type;
 import haxe.macro.Expr;
@@ -40,81 +42,90 @@ class ForwardOpsMacro {
         }
         var baseAbstractRef: Ref<AbstractType> = getAbstractRef(baseType);
 
+        // trace('--- $localTypePath extends $baseTypePath ---');
+
         var fields = Context.getBuildFields();
 
-        for (staticField in baseAbstractRef.get().impl.get().statics.get()) {
-            if (!staticField.meta.has(":op"))
+        for (baseField in baseAbstractRef.get().impl.get().statics.get()) {
+            if (!baseField.meta.has(":op"))
                 continue;
 
-            var newArgs = [];
-            var exprDef: ExprDef = {
+            // trace(ExprTools.toString(baseField.meta.extract(':op')[0].params[0]));
+
+            var baseParams;
+            var baseRet;
+            {
+                var type: Type = baseField.type;
+                // Extract the actual type if the type is TLazy
+                type = switch(type) {
+                    case TLazy(_ => _() => actualType):
+                        actualType;
+                    case _: type;
+                }
+
+                switch (type) {
+                    case TFun(args, ret):
+                        baseParams = args;
+                        baseRet = ret;
+                    case _: throw "Error"; // static fields with @:op should always be functions
+                }
+            }
+            
+            var newExpr: Expr = wrapExpr({
                 var castedThis: Expr = wrapExpr(ECast(
                     wrapExpr(EConst(CIdent("this"))),
                     baseComplexType
                 ));
 
-                switch (staticField.meta.extract(':op')[0].params[0].expr) {
-                    case EBinop(op, e1, e2):
-                        var type: Type = staticField.type;
-                        // Extract the actual type if the type is TLazy
-                        type = switch(type) {
-                            case TLazy(_ => _() => actualType):
-                                actualType;
-                            case _: type;
-                        }
-        
-                        var args = switch (type) {
-                            case TFun(__args, _):
-                                __args;
-                            case _: throw "Error"; // static fields with @:op should always be functions
-                        }
-        
-                        var arg = args[1]; // 
-                        var isBaseType: Bool = (getAbstractRef(arg.t).toString() == baseAbstractRef.toString());
-            
-                        var newArgType: ComplexType = if (isBaseType) {
-                            localComplexType;
-                        } else {
-                            Context.toComplexType(arg.t);
-                        }
-            
-                        var newArg: FunctionArg = {
-                            name: arg.name,
-                            opt: arg.opt,
-                            type: newArgType
-                            // value?
-                            // meta?
-                        };
-                        newArgs.push(newArg);
-
-                        var castedNewArg: Expr = wrapExpr(ECast( // casted newArg
-                            wrapExpr(EConst(CIdent(newArg.name))),
-                            baseComplexType
-                        ));
-
-                        EBinop(op, castedThis, castedNewArg);
-                    case EUnop(op, postFix, e):
+                switch (baseField.meta.extract(':op')[0].params[0].expr) {
+                    case EBinop(op, _, _):
+                        EBinop(op, castedThis, wrapExpr(ECast(
+                            wrapExpr(EConst(CIdent(baseParams[1].name))),
+                            Context.toComplexType(baseParams[1].t)
+                        )));
+                    case EUnop(op, postFix, _):
                         EUnop(op, postFix, castedThis);
                     case _: throw "Error";
                 }
-            }
+            });
 
             var newFunc: Function = {
-                args: newArgs,
-                ret: localComplexType,
-                expr: macro return ${wrapExpr(exprDef)}
+                args: (baseParams.length == 1) ? [] : [{
+                    name: baseParams[1].name,
+                    opt: baseParams[1].opt,
+                    type: (getAbstractRef(baseParams[1].t).toString() == baseAbstractRef.toString())
+                            ? localComplexType
+                            : Context.toComplexType(baseParams[1].t)
+                    // value?
+                    // meta?
+                }],
+                ret: (getAbstractRef(baseRet).toString() == baseAbstractRef.toString())
+                        ? localComplexType
+                        : Context.toComplexType(baseRet)
+                ,
+                expr: macro return $newExpr
+                // expr: wrapExpr(EReturn(
+                //     wrapExpr(ECast(
+                //         newExpr,
+                //         baseComplexType   
+                //     ))
+                // ))
                 // params?
             }
 
+            // trace(ExprTools.toString(newFunc.expr));
+
             fields.push({
-                name: staticField.name,
-                doc: staticField.doc,
-                access: [staticField.isPublic ? APublic : APrivate], // inherit access modifier
+                name: baseField.name,
+                doc: baseField.doc,
+                access: [baseField.isPublic ? APublic : APrivate], // inherit access modifier
                 kind: FFun(newFunc),
-                pos: staticField.pos,
-                meta: staticField.meta.get()
+                pos: baseField.pos,
+                meta: baseField.meta.get()
             });
         }
+
+        // trace("---------- END ----------");
 
         return fields;
     }

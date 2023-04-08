@@ -1,5 +1,6 @@
 package macros;
 
+import event.EventDispatcher;
 import haxe.macro.ExprTools;
 import haxe.macro.TypeTools;
 import haxe.macro.Context;
@@ -29,11 +30,13 @@ class ForwardOpsMacro {
     }
 
     macro static public function build (localTypePath: String, baseTypePath: String): Array<Field> {
+        var localType: Type = Context.getType(localTypePath);
         var localComplexType: ComplexType = {
-            var localType: Type = Context.getType(localTypePath);
             assertAbstract(localType);
             Context.toComplexType(localType);
         }
+        var localAbstractRef: Ref<AbstractType> = getAbstractRef(localType);
+        var localID = localAbstractRef.toString();
 
         var baseType: Type = Context.getType(baseTypePath);
         var baseComplexType: ComplexType = {
@@ -41,16 +44,21 @@ class ForwardOpsMacro {
             Context.toComplexType(baseType);
         }
         var baseAbstractRef: Ref<AbstractType> = getAbstractRef(baseType);
+        var baseID = baseAbstractRef.toString();
 
-        // trace('--- $localTypePath extends $baseTypePath ---');
+        // 
+        trace('--- $localTypePath extends $baseTypePath ---');
+        // 
 
         var fields = Context.getBuildFields();
-
+        
         for (baseField in baseAbstractRef.get().impl.get().statics.get()) {
             if (!baseField.meta.has(":op"))
                 continue;
 
-            // trace(ExprTools.toString(baseField.meta.extract(':op')[0].params[0]));
+            //
+            trace(ExprTools.toString(baseField.meta.extract(':op')[0].params[0]));
+            // 
 
             var baseParams;
             var baseRet;
@@ -113,7 +121,9 @@ class ForwardOpsMacro {
                 // params?
             }
 
-            // trace(ExprTools.toString(newFunc.expr));
+            // 
+            trace(ExprTools.toString(newFunc.expr));
+            // 
 
             fields.push({
                 name: baseField.name,
@@ -125,7 +135,9 @@ class ForwardOpsMacro {
             });
         }
 
-        // trace("---------- END ----------");
+        // 
+        trace("---------- END ----------");
+        // 
 
         return fields;
     }
